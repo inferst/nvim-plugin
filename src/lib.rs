@@ -1,23 +1,18 @@
-use std::thread;
+use std::{cell::RefCell, rc::Rc, thread};
 
 use nvim_oxi::{
-    api::{self, echo, opts::*, types::*, Buffer, Window},
-    Result,
+    api::{self, opts::*, types::*, Buffer, Window},
+    libuv::AsyncHandle,
+    schedule, Result,
 };
+use tokio::sync::mpsc::{self, UnboundedSender};
 use twitch_irc::{
     login::StaticLoginCredentials, message::ServerMessage, ClientConfig, SecureTCPTransport,
     TwitchIRCClient,
 };
 
 #[tokio::main(flavor = "current_thread")]
-pub async fn connect(buf: Buffer) -> Result<()> {
-    let win: Option<Window> = None;
-
-    let mut plugin = Plugin {
-        buffer: buf,
-        window: win,
-    };
-
+pub async fn connect(handle: AsyncHandle, sender: UnboundedSender<CommandPayload>) -> Result<()> {
     let config = ClientConfig::default();
     let (mut incoming_messages, client) =
         TwitchIRCClient::<SecureTCPTransport, StaticLoginCredentials>::new(config);
@@ -26,15 +21,34 @@ pub async fn connect(buf: Buffer) -> Result<()> {
         while let Some(message) = incoming_messages.recv().await {
             match message {
                 ServerMessage::Privmsg(msg) => {
-                    let mut split = msg.message_text.splitn(2, " ");
+                    let mut split = msg.message_text.trim().splitn(2, " ");
 
-                    if let Some("!nvim") = split.next() {
-                        if let Some(text) = split.next() {
+                    let command = split.next();
+                    let argument = split.next();
+
+                    if let Some("!nvim") = command {
+                        if let Some(text) = argument {
                             let name = msg.sender.name;
 
-                            plugin.show_msg(&name, &text).unwrap_or_else(|_| {
-                                plugin.echo("Plugin Error").unwrap();
-                            });
+                            sender
+                                .send(CommandPayload {
+                                    command: Command::Message(name.to_owned(), text.to_owned()),
+                                })
+                                .unwrap();
+
+                            handle.send().unwrap();
+                        }
+                    }
+
+                    if let Some("!colorscheme") = command {
+                        if let Some(colorscheme) = argument {
+                            sender
+                                .send(CommandPayload {
+                                    command: Command::ColorScheme(colorscheme.to_owned()),
+                                })
+                                .unwrap();
+
+                            handle.send().unwrap();
                         }
                     }
                 }
@@ -58,9 +72,17 @@ struct Plugin {
 }
 
 impl Plugin {
-    fn echo(&self, str: &str) -> Result<()> {
-        let opts = EchoOpts::builder().build();
-        echo([(str, None)], false, &opts)?;
+    fn err(&self, str: &str) -> Result<()> {
+        api::err_writeln(str);
+        Ok(())
+    }
+
+    fn colosrcheme(&self, colorscheme: String) -> Result<()> {
+        let mut command = String::from("colorscheme ");
+        command.push_str(colorscheme.as_str());
+
+        api::command(command.as_str())?;
+
         Ok(())
     }
 
@@ -114,24 +136,60 @@ impl Plugin {
     }
 }
 
+#[derive(Debug)]
+pub enum Command {
+    Message(String, String),
+    ColorScheme(String),
+}
+
+#[derive(Debug)]
+pub struct CommandPayload {
+    command: Command,
+}
+
 #[nvim_oxi::plugin]
 pub fn nvim_plugin() -> Result<()> {
+    let (sender, mut receiver) = mpsc::unbounded_channel::<CommandPayload>();
+
     let buf = nvim_oxi::api::create_buf(false, true)?;
 
+    let win: Option<Window> = None;
+
+    let plugin: Rc<RefCell<Plugin>> = Rc::new(RefCell::new(Plugin {
+        buffer: buf,
+        window: win,
+    }));
+
+    let handle = AsyncHandle::new(move || {
+        let payload = receiver.blocking_recv().unwrap();
+
+        let plugin_ref = Rc::clone(&plugin);
+
+        schedule(move |_| {
+            let mut plugin = plugin_ref.borrow_mut();
+
+            match payload.command {
+                Command::Message(author, text) => {
+                    plugin
+                        .show_msg(author.as_str(), text.as_str())
+                        .unwrap_or_else(|_| {
+                            plugin.err("Plugin Error: Message").unwrap();
+                        });
+                }
+                Command::ColorScheme(colorscheme) => {
+                    plugin.colosrcheme(colorscheme).unwrap_or_else(|_| {
+                        plugin.err("Plugin Error: Colorscheme").unwrap();
+                    });
+                }
+            }
+        });
+    })?;
+
     thread::spawn(move || {
-        connect(buf).unwrap_or_else(|e| {
+        connect(handle, sender).unwrap_or_else(|e| {
             println!("{:?}", e);
         });
     });
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[nvim_oxi::test]
-    fn it_works() {
-        nvim_oxi::api::set_var("foo", 42).unwrap();
-        assert_eq!(nvim_oxi::api::get_var("foo"), Ok(42));
-    }
 }

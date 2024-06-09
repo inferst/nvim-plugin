@@ -302,6 +302,7 @@ checksum = "09ccc950ab8107c9a31cf45d1601251022be3aa9c8547148a25402da074b51fe"
 dependencies = [
  "miniserde",
  "nvim-oxi-api",
+ "nvim-oxi-libuv",
  "nvim-oxi-luajit",
  "nvim-oxi-macros",
  "nvim-oxi-types",
@@ -319,6 +320,16 @@ dependencies = [
  "nvim-oxi-types",
  "serde",
  "serde_repr",
+ "thiserror",
+]
+
+[[package]]
+name = "nvim-oxi-libuv"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf5482cd89c0ac5a4b1cdbd37211677b378af73f813bc785dad15e8a04bd4684"
+dependencies = [
+ "nvim-oxi-luajit",
  "thiserror",
 ]
 

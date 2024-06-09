@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [features]
-default = ["nvim-oxi/neovim-0-9", "nvim-oxi/test"]
+default = ["nvim-oxi/neovim-0-9", "nvim-oxi/test", "nvim-oxi/libuv"]
 
 [dependencies]
 nvim-oxi = "0.5"
